@@ -127,7 +127,7 @@ public class TableUI : MonoBehaviour
             case GamePhase.Waiting: return "Klik START untuk mulai";
             case GamePhase.PlayerTurn: return "Your Turn (Hit or Stand)";
             case GamePhase.DealerTurn: return "Dealer Turn";
-            case GamePhase.Result: return game.status + "!";
+            case GamePhase.Result: return "You " + game.status + "!";
         }
         return "";
     }

@@ -20,7 +20,6 @@ public class BlackjackGame : MonoBehaviour
     static readonly string[] SUITS = { "clubs", "diamonds", "hearts", "spades" };
     static readonly string[] RANKS = { "A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K" };
 
-    // Data game
     public GamePhase phase = GamePhase.Waiting;
     public int money;
     public int bet;
