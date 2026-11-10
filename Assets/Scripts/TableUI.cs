@@ -31,7 +31,7 @@ public class TableUI : MonoBehaviour
     public Color seatColor = new Color(0f, 0f, 0f, 0.35f);     // warna kursi default
     public Color turnColor = new Color(1f, 0.85f, 0f, 0.5f);   // warna kursi saat turn player pov
 
-    public float disabledTextAlpha = 0.4f;   // text tombol yang mati (0 = hilang, 1 = terang)
+    public float disabledTextAlpha = 0.4f;  
 
     bool needRefresh = true;
     Dictionary<string, Sprite> spriteCache = new Dictionary<string, Sprite>();
@@ -97,7 +97,7 @@ public class TableUI : MonoBehaviour
         seat.nameText.text = playerName;
 
         string info = "Money: " + game.money;
-        info += "   Bet: " + (game.bet > 0 ? game.bet : game.nextBet);   // lagi main = bet ronde ini, belum main = bet yang dipilih
+        info += "   Bet: " + (game.bet > 0 ? game.bet : game.nextBet);   // lagi main = bet round ini, belum main = bet yang dipilih
         if (game.playerCards.Count > 0) info += "\nScore: " + BlackjackGame.GetScore(game.playerCards);
         info += "\n" + game.status;
         seat.infoText.text = info;

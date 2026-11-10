@@ -219,7 +219,7 @@ public class BlackjackGame : MonoBehaviour
         return rank + 1;
     }
 
-    // hitung total score. if lewat TARGET_SCORE, kartu A dihitung 1 
+    // hitung total score. if lewat TARGET_SCORE, kartu A dihitung 1 (karena A itu bisa 1 atau 11)
     public static int GetScore(List<int> cards)
     {
         int total = 0;
