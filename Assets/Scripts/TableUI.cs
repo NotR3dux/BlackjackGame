@@ -97,7 +97,7 @@ public class TableUI : MonoBehaviour
         seat.nameText.text = playerName;
 
         string info = "Money: " + game.money;
-        info += "   Bet: " + (game.bet > 0 ? game.bet : game.nextBet);   // lagi main = bet round ini, belum main = bet yang dipilih
+        info += "   Bet: " + (game.bet > 0 ? game.bet : game.nextBet);  
         if (game.playerCards.Count > 0) info += "\nScore: " + BlackjackGame.GetScore(game.playerCards);
         info += "\n" + game.status;
         seat.infoText.text = info;
