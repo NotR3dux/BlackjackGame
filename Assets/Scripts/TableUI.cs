@@ -1,181 +1,244 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.IO;
+using System.Net;
+using System.Net.Sockets;
+using System.Threading;
 using UnityEngine;
-using UnityEngine.UI;
 
-public class TableUI : MonoBehaviour
+public class MultiplayerHost : MonoBehaviour
 {
-    [Serializable]
-    public class Seat
-    {
-        public Image background;
-        public Text nameText;
-        public Transform cardArea;
-        public Text infoText;
-    }
+    public const int PORT = 7777;
+    const string CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
-    public BlackjackGame game;
+    public bool isConnected;
+    public bool isHost;
+    public string joinCode = "";
 
-    public Seat[] seats;
-    public Text dealerText;
-    public Transform dealerCardArea;
-    public Text infoText;
+    public Func<int> OnAssignSeat;
+    public Action<int, string> OnClientCommand;
+    public Action<int> OnClientLeft;
+    public Action<int> OnJoinedAsClient;
+    public Action<string> OnStateReceived;
 
-    public Button hitButton;
-    public Button standButton;
-    public Button startButton;
-    public Button lessBetButton;
-    public Button moreBetButton;
-
-    // Hubungkan ke JoinButton dan Join Text (InputField) yang ada di scene
-    public Button joinButton;
-    public InputField joinTextInput;
-
-    public Vector2 cardSize = new Vector2(90, 126);
-    public Color seatColor = new Color(0f, 0f, 0f, 0.35f);     // warna kursi default
-    public Color turnColor = new Color(1f, 0.85f, 0f, 0.5f);   // warna kursi saat turn player pov
-
-    public float disabledTextAlpha = 0.4f;
-
-    bool needRefresh = true;
-    bool codeShownOnStart = false;
-    Dictionary<string, Sprite> spriteCache = new Dictionary<string, Sprite>();
-
-    void Awake()
-    {
-        hitButton.onClick.AddListener(game.Hit);
-        standButton.onClick.AddListener(game.Stand);
-        startButton.onClick.AddListener(game.StartRound);
-        lessBetButton.onClick.AddListener(game.LessBet);
-        moreBetButton.onClick.AddListener(game.MoreBet);
-
-        if (joinButton != null)
-        {
-            joinButton.onClick.AddListener(() =>
-            {
-                if (joinTextInput != null) game.JoinGame(joinTextInput.text);
-            });
-        }
-
-        game.OnStateChanged += () => needRefresh = true;
-    }
+    TcpListener server;
+    readonly Dictionary<int, StreamWriter> clientWriters = new Dictionary<int, StreamWriter>();
+    StreamWriter hostWriter;
+    TcpClient clientSocket;
+    readonly ConcurrentQueue<Action> mainThread = new ConcurrentQueue<Action>();
 
     void Update()
     {
-        if (needRefresh)
+        while (mainThread.TryDequeue(out Action action)) action?.Invoke();
+    }
+
+    void OnDestroy()
+    {
+        StopAll();
+    }
+
+    public void StopAll()
+    {
+        isConnected = false;
+        isHost = false;
+        try { server?.Stop(); } catch { }
+        server = null;
+        try { clientSocket?.Close(); } catch { }
+        clientSocket = null;
+        hostWriter = null;
+        lock (clientWriters) clientWriters.Clear();
+    }
+
+    public string StartHost()
+    {
+        StopAll();
+        try
         {
-            needRefresh = false;
-            Refresh();
+            server = new TcpListener(IPAddress.Any, PORT);
+            server.Server.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+            server.Start();
+
+            isHost = true;
+            isConnected = true;
+            joinCode = IpToCode(GetLocalIp());
+
+            new Thread(AcceptLoop) { IsBackground = true }.Start();
+            return joinCode;
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning("Host Error: " + e.Message);
+            return "ERROR";
         }
     }
 
-    void Refresh()
+    void AcceptLoop()
     {
-        // Tampilkan kode Host di Join Text saat game pertama kali mulai
-        if (!codeShownOnStart && joinTextInput != null && game.net != null && !string.IsNullOrEmpty(game.net.joinCode))
+        while (isConnected && isHost)
         {
-            joinTextInput.text = game.net.joinCode;
-            codeShownOnStart = true;
-        }
-
-        // Dealer
-        ShowCards(dealerCardArea, game.dealerCards);
-        dealerText.text = game.dealerCards.Count > 0 ? "DEALER   Score: " + BlackjackGame.GetScore(game.dealerCards) : "DEALER";
-
-        // Tampilkan Seat 1 - Seat 4
-        for (int i = 0; i < seats.Length; i++)
-        {
-            if (i < 4 && game.seatsData[i].isOccupied)
+            try
             {
-                bool isTurn = (game.phase == GamePhase.PlayerTurn && game.turnSeat == i);
-                string name = (i == game.localSeat) ? $"Player {i + 1} (You)" : $"Player {i + 1}";
-                ShowPlayer(seats[i], game.seatsData[i], name, isTurn);
+                TcpClient client = server.AcceptTcpClient();
+                new Thread(() => HandleClient(client)) { IsBackground = true }.Start();
             }
-            else
+            catch { break; }
+        }
+    }
+
+    void HandleClient(TcpClient client)
+    {
+        int seat = -1;
+        try
+        {
+            using (NetworkStream stream = client.GetStream())
+            using (StreamReader reader = new StreamReader(stream))
             {
-                ShowEmptySeat(seats[i], i);
+                StreamWriter writer = new StreamWriter(stream) { AutoFlush = true };
+
+                using (ManualResetEventSlim wait = new ManualResetEventSlim(false))
+                {
+                    mainThread.Enqueue(() => { seat = OnAssignSeat != null ? OnAssignSeat() : -1; wait.Set(); });
+                    wait.Wait(2000);
+                }
+
+                if (seat < 1 || seat > 3) { client.Close(); return; }
+
+                lock (clientWriters) clientWriters[seat] = writer;
+                writer.WriteLine("SEAT|" + seat);
+                mainThread.Enqueue(() => OnClientCommand?.Invoke(seat, "JOIN"));
+
+                while (client.Connected)
+                {
+                    string line = reader.ReadLine();
+                    if (line == null) break;
+                    int s = seat;
+                    mainThread.Enqueue(() => OnClientCommand?.Invoke(s, line));
+                }
             }
         }
-
-        infoText.text = GetInfoText();
-
-        bool myTurn = (game.phase == GamePhase.PlayerTurn && game.turnSeat == game.localSeat);
-        BlackjackGame.SeatData mySeat = game.seatsData[game.localSeat];
-
-        SetButton(hitButton, myTurn);
-        SetButton(standButton, myTurn);
-        SetButton(startButton, game.IsHost() && (game.phase == GamePhase.Waiting || game.phase == GamePhase.Result));
-
-        SetButton(lessBetButton, game.CanChangeBet() && mySeat.nextBet > BlackjackGame.BET_AMOUNT);
-        SetButton(moreBetButton, game.CanChangeBet() && mySeat.nextBet + BlackjackGame.BET_AMOUNT <= mySeat.money);
-    }
-
-    void SetButton(Button button, bool isOn)
-    {
-        button.interactable = isOn;
-        Text text = button.GetComponentInChildren<Text>();
-        Color color = text.color;
-        color.a = isOn ? 1f : disabledTextAlpha;
-        text.color = color;
-    }
-
-    void ShowPlayer(Seat seat, BlackjackGame.SeatData data, string playerName, bool isTurn)
-    {
-        seat.nameText.text = playerName;
-
-        string info = "Money: " + data.money;
-        info += "   Bet: " + (data.bet > 0 ? data.bet : data.nextBet);
-        if (data.cards.Count > 0) info += "\nScore: " + BlackjackGame.GetScore(data.cards);
-        info += "\n" + data.status;
-        seat.infoText.text = info;
-
-        seat.background.color = isTurn ? turnColor : seatColor;
-        ShowCards(seat.cardArea, data.cards);
-    }
-
-    void ShowEmptySeat(Seat seat, int index)
-    {
-        seat.nameText.text = "Seat " + (index + 1);
-        seat.infoText.text = "Empty";
-        seat.background.color = seatColor;
-        ShowCards(seat.cardArea, new List<int>());
-    }
-
-    string GetInfoText()
-    {
-        bool roundOver = game.phase == GamePhase.Waiting || game.phase == GamePhase.Result;
-        if (roundOver && game.money < BlackjackGame.BET_AMOUNT) return "Game Over";
-
-        switch (game.phase)
+        catch { }
+        finally
         {
-            case GamePhase.Waiting: return game.IsHost() ? "Klik START untuk mulai" : "Tunggu Host klik START";
-            case GamePhase.PlayerTurn: return game.turnSeat == game.localSeat ? "Your Turn (Hit or Stand)" : $"Player {game.turnSeat + 1} Turn";
-            case GamePhase.DealerTurn: return "Dealer Turn";
-            case GamePhase.Result: return "You " + game.status + "!";
-        }
-        return "";
-    }
-
-    void ShowCards(Transform area, List<int> cards)
-    {
-        foreach (Transform child in area) Destroy(child.gameObject);
-
-        foreach (int card in cards)
-        {
-            GameObject cardObject = new GameObject("Card", typeof(RectTransform), typeof(Image));
-            cardObject.transform.SetParent(area, false);
-            cardObject.GetComponent<RectTransform>().sizeDelta = cardSize;
-            cardObject.GetComponent<Image>().sprite = GetSprite(card);
+            if (seat >= 1)
+            {
+                lock (clientWriters) clientWriters.Remove(seat);
+                mainThread.Enqueue(() => OnClientLeft?.Invoke(seat));
+            }
+            try { client.Close(); } catch { }
         }
     }
 
-    Sprite GetSprite(int card)
+    public void Join(string code)
     {
-        string spriteName = BlackjackGame.GetSpriteName(card);
-        if (!spriteCache.ContainsKey(spriteName))
+        string ip = CodeToIp(code);
+        if (string.IsNullOrEmpty(ip)) return;
+
+        StopAll();
+        joinCode = code.Trim().ToUpperInvariant();
+
+        new Thread(() =>
         {
-            spriteCache[spriteName] = Resources.Load<Sprite>("Cards/" + spriteName);
+            try
+            {
+                clientSocket = new TcpClient();
+                clientSocket.Connect(ip, PORT);
+                using (NetworkStream stream = clientSocket.GetStream())
+                using (StreamReader reader = new StreamReader(stream))
+                {
+                    hostWriter = new StreamWriter(stream) { AutoFlush = true };
+                    isHost = false;
+                    isConnected = true;
+
+                    while (clientSocket.Connected)
+                    {
+                        string line = reader.ReadLine();
+                        if (line == null) break;
+
+                        if (line.StartsWith("SEAT|"))
+                        {
+                            int mySeat = int.Parse(line.Substring(5));
+                            mainThread.Enqueue(() => OnJoinedAsClient?.Invoke(mySeat));
+                        }
+                        else if (line.StartsWith("STATE|"))
+                        {
+                            string json = line.Substring(6);
+                            mainThread.Enqueue(() => OnStateReceived?.Invoke(json));
+                        }
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning("Join Error: " + e.Message);
+                isConnected = false;
+            }
+        })
+        { IsBackground = true }.Start();
+    }
+
+    public void SendToClients(string json)
+    {
+        if (!isHost || !isConnected) return;
+        lock (clientWriters)
+        {
+            foreach (var kv in new List<KeyValuePair<int, StreamWriter>>(clientWriters))
+            {
+                try { kv.Value.WriteLine("STATE|" + json); }
+                catch { clientWriters.Remove(kv.Key); }
+            }
         }
-        return spriteCache[spriteName];
+    }
+
+    public void SendToHost(string cmd)
+    {
+        if (isHost || !isConnected || hostWriter == null) return;
+        try { hostWriter.WriteLine(cmd); } catch { }
+    }
+
+    public static string GetLocalIp()
+    {
+        try
+        {
+            using (Socket s = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, 0))
+            {
+                s.Connect("8.8.8.8", 65530);
+                return ((IPEndPoint)s.LocalEndPoint).Address.ToString();
+            }
+        }
+        catch { return "127.0.0.1"; }
+    }
+
+    public static string IpToCode(string ipStr)
+    {
+        if (!IPAddress.TryParse(ipStr, out IPAddress ip)) ip = IPAddress.Loopback;
+        byte[] b = ip.GetAddressBytes();
+        uint val = (((uint)b[1] << 16) | ((uint)b[2] << 8) | b[3]) ^ 0x5A3C91u;
+        char prefix = b[0] == 192 ? 'C' : b[0] == 10 ? 'A' : b[0] == 172 ? 'B' : 'L';
+
+        char[] res = new char[6];
+        res[0] = prefix;
+        for (int i = 5; i >= 1; i--) { res[i] = CHARS[(int)(val % 36)]; val /= 36; }
+        return new string(res);
+    }
+
+    public static string CodeToIp(string code)
+    {
+        if (string.IsNullOrWhiteSpace(code)) return null;
+        code = code.Trim().ToUpperInvariant();
+        if (code.Contains(".")) return code;
+        if (code.Length != 6) return null;
+
+        ulong val = 0;
+        for (int i = 1; i < 6; i++)
+        {
+            int idx = CHARS.IndexOf(code[i]);
+            if (idx < 0) return null;
+            val = val * 36 + (ulong)idx;
+        }
+
+        uint raw = ((uint)val) ^ 0x5A3C91u;
+        byte b0 = code[0] == 'C' ? (byte)192 : code[0] == 'A' ? (byte)10 : code[0] == 'B' ? (byte)172 : (byte)127;
+        return $"{b0}.{(raw >> 16) & 0xFF}.{(raw >> 8) & 0xFF}.{raw & 0xFF}";
     }
 }
