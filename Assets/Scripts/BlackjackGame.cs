@@ -44,7 +44,6 @@ public class BlackjackGame : MonoBehaviour
     public List<int> playerCards = new List<int>();
     public List<int> dealerCards = new List<int>();
 
-    // Data 4 kursi (Seat 1 - Seat 4)
     public SeatData[] seatsData = new SeatData[4];
     public int localSeat = 0;       // 0 = Seat 1, 1 = Seat 2, 2 = Seat 3, 3 = Seat 4
     public int turnSeat = -1;       // Giliran kursi mana sekarang (0 -> 1 -> 2 -> 3)
@@ -71,7 +70,8 @@ public class BlackjackGame : MonoBehaviour
 
     void Start()
     {
-        Changed();
+        // Otomatis Host & tampilkan Join Code saat game mulai
+        HostGame();
     }
 
     void Changed()
@@ -98,7 +98,6 @@ public class BlackjackGame : MonoBehaviour
         OnStateChanged?.Invoke();
     }
 
-    // Player 1 jadi Host di Seat 1 & dapat Join Code
     public string HostGame()
     {
         localSeat = 0;
@@ -108,10 +107,13 @@ public class BlackjackGame : MonoBehaviour
         return code;
     }
 
-    // Player 2-4 masuk pakai Join Code ke Seat 2-4
     public void JoinGame(string code)
     {
-        net.Join(code);
+        if (string.IsNullOrWhiteSpace(code)) return;
+        string cleaned = code.Trim().ToUpperInvariant();
+        if (net.isHost && cleaned == net.joinCode) return;
+
+        net.Join(cleaned);
     }
 
     int AssignEmptySeat()
@@ -192,7 +194,6 @@ public class BlackjackGame : MonoBehaviour
         NewDeck();
         dealerCards.Clear();
 
-        // Bagi 2 kartu ke setiap seat yang terisi (Seat 1 - Seat 4)
         for (int i = 0; i < 4; i++)
         {
             SeatData s = seatsData[i];
@@ -218,7 +219,7 @@ public class BlackjackGame : MonoBehaviour
         dealerCards.Add(HIDDEN_CARD);
 
         phase = GamePhase.PlayerTurn;
-        NextTurn(-1); // Mulai dari Player 1 (Seat 0) -> Player 2 -> Player 3 -> Player 4
+        NextTurn(-1);
     }
 
     public void Hit()
@@ -254,7 +255,6 @@ public class BlackjackGame : MonoBehaviour
         NextTurn(s);
     }
 
-    // Pindah giliran: Player 1 -> Player 2 -> Player 3 -> Player 4 -> Dealer
     void NextTurn(int current)
     {
         for (int next = current + 1; next < 4; next++)

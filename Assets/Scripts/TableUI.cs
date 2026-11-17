@@ -27,10 +27,9 @@ public class TableUI : MonoBehaviour
     public Button lessBetButton;
     public Button moreBetButton;
 
-    // 3 elemen UI simpel buat Multiplayer (otomatis dibuat kalau kosong di Inspector)
-    public Button showCodeHostButton;
-    public InputField codeInputField;
-    public Button joinCodeButton;
+    // Hubungkan ke JoinButton dan Join Text (InputField) yang ada di scene
+    public Button joinButton;
+    public InputField joinTextInput;
 
     public Vector2 cardSize = new Vector2(90, 126);
     public Color seatColor = new Color(0f, 0f, 0f, 0.35f);     // warna kursi default
@@ -39,6 +38,7 @@ public class TableUI : MonoBehaviour
     public float disabledTextAlpha = 0.4f;
 
     bool needRefresh = true;
+    bool codeShownOnStart = false;
     Dictionary<string, Sprite> spriteCache = new Dictionary<string, Sprite>();
 
     void Awake()
@@ -49,9 +49,15 @@ public class TableUI : MonoBehaviour
         lessBetButton.onClick.AddListener(game.LessBet);
         moreBetButton.onClick.AddListener(game.MoreBet);
 
-        game.OnStateChanged += () => needRefresh = true;
+        if (joinButton != null)
+        {
+            joinButton.onClick.AddListener(() =>
+            {
+                if (joinTextInput != null) game.JoinGame(joinTextInput.text);
+            });
+        }
 
-        SetupSimpleMultiplayerUI();
+        game.OnStateChanged += () => needRefresh = true;
     }
 
     void Update()
@@ -65,6 +71,13 @@ public class TableUI : MonoBehaviour
 
     void Refresh()
     {
+        // Tampilkan kode Host di Join Text saat game pertama kali mulai
+        if (!codeShownOnStart && joinTextInput != null && game.net != null && !string.IsNullOrEmpty(game.net.joinCode))
+        {
+            joinTextInput.text = game.net.joinCode;
+            codeShownOnStart = true;
+        }
+
         // Dealer
         ShowCards(dealerCardArea, game.dealerCards);
         dealerText.text = game.dealerCards.Count > 0 ? "DEALER   Score: " + BlackjackGame.GetScore(game.dealerCards) : "DEALER";
@@ -164,84 +177,5 @@ public class TableUI : MonoBehaviour
             spriteCache[spriteName] = Resources.Load<Sprite>("Cards/" + spriteName);
         }
         return spriteCache[spriteName];
-    }
-
-    // Buat 1 tombol Show Code (Host), 1 tempat ketik Code, dan 1 tombol Join Code
-    void SetupSimpleMultiplayerUI()
-    {
-        if (showCodeHostButton == null || codeInputField == null || joinCodeButton == null)
-        {
-            Canvas canvas = GetComponentInParent<Canvas>() ?? FindFirstObjectByType<Canvas>();
-            if (canvas == null) return;
-            Font font = infoText != null ? infoText.font : Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
-
-            showCodeHostButton = MakeButton(canvas.transform, font, "SHOW CODE (HOST)", new Vector2(20, -20));
-            codeInputField = MakeInput(canvas.transform, font, "ENTER CODE", new Vector2(210, -20));
-            joinCodeButton = MakeButton(canvas.transform, font, "JOIN CODE", new Vector2(400, -20));
-        }
-
-        showCodeHostButton.onClick.AddListener(() =>
-        {
-            string code = game.HostGame();
-            showCodeHostButton.GetComponentInChildren<Text>().text = "CODE: " + code;
-            codeInputField.text = code;
-        });
-
-        joinCodeButton.onClick.AddListener(() =>
-        {
-            game.JoinGame(codeInputField.text);
-            joinCodeButton.GetComponentInChildren<Text>().text = "JOINED";
-        });
-    }
-
-    Button MakeButton(Transform parent, Font font, string label, Vector2 pos)
-    {
-        GameObject go = new GameObject(label, typeof(RectTransform), typeof(Image), typeof(Button));
-        go.transform.SetParent(parent, false);
-        RectTransform rt = go.GetComponent<RectTransform>();
-        rt.anchorMin = rt.anchorMax = rt.pivot = new Vector2(0, 1);
-        rt.anchoredPosition = pos;
-        rt.sizeDelta = new Vector2(180, 40);
-        go.GetComponent<Image>().color = new Color(0.15f, 0.45f, 0.25f, 0.95f);
-
-        GameObject txt = new GameObject("Text", typeof(RectTransform), typeof(Text));
-        txt.transform.SetParent(go.transform, false);
-        RectTransform tr = txt.GetComponent<RectTransform>();
-        tr.anchorMin = Vector2.zero; tr.anchorMax = Vector2.one; tr.sizeDelta = Vector2.zero;
-
-        Text t = txt.GetComponent<Text>();
-        t.font = font; t.text = label; t.fontSize = 15; t.alignment = TextAnchor.MiddleCenter; t.color = Color.white;
-        return go.GetComponent<Button>();
-    }
-
-    InputField MakeInput(Transform parent, Font font, string placeholder, Vector2 pos)
-    {
-        GameObject go = new GameObject("CodeInput", typeof(RectTransform), typeof(Image), typeof(InputField));
-        go.transform.SetParent(parent, false);
-        RectTransform rt = go.GetComponent<RectTransform>();
-        rt.anchorMin = rt.anchorMax = rt.pivot = new Vector2(0, 1);
-        rt.anchoredPosition = pos;
-        rt.sizeDelta = new Vector2(180, 40);
-        go.GetComponent<Image>().color = new Color(0.15f, 0.15f, 0.15f, 0.95f);
-
-        GameObject txt = new GameObject("Text", typeof(RectTransform), typeof(Text));
-        txt.transform.SetParent(go.transform, false);
-        RectTransform tr = txt.GetComponent<RectTransform>();
-        tr.anchorMin = Vector2.zero; tr.anchorMax = Vector2.one; tr.sizeDelta = new Vector2(-10, 0);
-
-        Text t = txt.GetComponent<Text>();
-        t.font = font; t.fontSize = 16; t.alignment = TextAnchor.MiddleCenter; t.color = Color.yellow;
-
-        GameObject ph = new GameObject("Placeholder", typeof(RectTransform), typeof(Text));
-        ph.transform.SetParent(go.transform, false);
-        RectTransform pr = ph.GetComponent<RectTransform>();
-        pr.anchorMin = Vector2.zero; pr.anchorMax = Vector2.one; pr.sizeDelta = new Vector2(-10, 0);
-
-        Text pt = ph.GetComponent<Text>();
-        pt.font = font; pt.text = placeholder; pt.fontSize = 14; pt.alignment = TextAnchor.MiddleCenter; pt.color = Color.gray;
-
-        InputField input = go.GetComponent<InputField>();
-        input.textComponent = t; input.placeholder = pt;
-        return input;
     }
 }

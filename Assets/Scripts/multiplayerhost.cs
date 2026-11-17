@@ -25,6 +25,7 @@ public class MultiplayerHost : MonoBehaviour
     TcpListener server;
     readonly Dictionary<int, StreamWriter> clientWriters = new Dictionary<int, StreamWriter>();
     StreamWriter hostWriter;
+    TcpClient clientSocket;
     readonly ConcurrentQueue<Action> mainThread = new ConcurrentQueue<Action>();
 
     void Update()
@@ -34,15 +35,26 @@ public class MultiplayerHost : MonoBehaviour
 
     void OnDestroy()
     {
-        try { server?.Stop(); } catch { }
+        StopAll();
     }
 
-    // Player 1 klik Host -> buat server & tampilkan 6-digit Join Code
+    public void StopAll()
+    {
+        isConnected = false;
+        isHost = false;
+        try { server?.Stop(); } catch { }
+        server = null;
+        try { clientSocket?.Close(); } catch { }
+        clientSocket = null;
+        hostWriter = null;
+        lock (clientWriters) clientWriters.Clear();
+    }
+
     public string StartHost()
     {
+        StopAll();
         try
         {
-            server?.Stop();
             server = new TcpListener(IPAddress.Any, PORT);
             server.Server.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
             server.Start();
@@ -117,27 +129,28 @@ public class MultiplayerHost : MonoBehaviour
         }
     }
 
-    // Player 2, 3, 4 masukkan kode -> connect ke Host
     public void Join(string code)
     {
         string ip = CodeToIp(code);
         if (string.IsNullOrEmpty(ip)) return;
 
+        StopAll();
         joinCode = code.Trim().ToUpperInvariant();
+
         new Thread(() =>
         {
             try
             {
-                TcpClient client = new TcpClient();
-                client.Connect(ip, PORT);
-                using (NetworkStream stream = client.GetStream())
+                clientSocket = new TcpClient();
+                clientSocket.Connect(ip, PORT);
+                using (NetworkStream stream = clientSocket.GetStream())
                 using (StreamReader reader = new StreamReader(stream))
                 {
                     hostWriter = new StreamWriter(stream) { AutoFlush = true };
                     isHost = false;
                     isConnected = true;
 
-                    while (client.Connected)
+                    while (clientSocket.Connected)
                     {
                         string line = reader.ReadLine();
                         if (line == null) break;
@@ -160,7 +173,8 @@ public class MultiplayerHost : MonoBehaviour
                 Debug.LogWarning("Join Error: " + e.Message);
                 isConnected = false;
             }
-        }) { IsBackground = true }.Start();
+        })
+        { IsBackground = true }.Start();
     }
 
     public void SendToClients(string json)
@@ -195,7 +209,6 @@ public class MultiplayerHost : MonoBehaviour
         catch { return "127.0.0.1"; }
     }
 
-    // Ubah IP Wi-Fi LAN jadi 6 karakter kode (contoh: C4K9X2)
     public static string IpToCode(string ipStr)
     {
         if (!IPAddress.TryParse(ipStr, out IPAddress ip)) ip = IPAddress.Loopback;
@@ -209,7 +222,6 @@ public class MultiplayerHost : MonoBehaviour
         return new string(res);
     }
 
-    // Ubah 6 karakter kode kembali jadi IP Wi-Fi Host
     public static string CodeToIp(string code)
     {
         if (string.IsNullOrWhiteSpace(code)) return null;
