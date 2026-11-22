@@ -66,6 +66,20 @@ public class BlackjackGame : MonoBehaviour
         net.OnClientLeft = OnClientLeft;
         net.OnJoinedAsClient = seat => { localSeat = seat; Changed(); };
         net.OnStateReceived = ApplyNetworkState;
+        net.OnConnectionChanged = Changed;
+        net.OnHostLost = ResetDisconnectedTable;
+        Changed();
+    }
+
+    void ResetDisconnectedTable()
+    {
+        StopAllCoroutines();
+        localSeat = 0;
+        turnSeat = -1;
+        phase = GamePhase.Waiting;
+        dealerCards.Clear();
+        for (int i = 0; i < seatsData.Length; i++)
+            seatsData[i] = new SeatData { isOccupied = i == 0 };
     }
 
     void Changed()
@@ -103,11 +117,8 @@ public class BlackjackGame : MonoBehaviour
 
     public void JoinGame(string code)
     {
-        if (string.IsNullOrWhiteSpace(code)) return;
-        string cleaned = code.Trim().ToUpperInvariant();
-        if (net.isHost && cleaned == net.joinCode) return;
-
-        net.Join(cleaned);
+        if (!CanChangeBet()) return;
+        net.Join(code);
     }
 
     int AssignEmptySeat()
@@ -127,6 +138,8 @@ public class BlackjackGame : MonoBehaviour
     {
         seatsData[seat].isOccupied = false;
         seatsData[seat].cards.Clear();
+        seatsData[seat].bet = 0;
+        seatsData[seat].status = PlayerStatus.Waiting;
         if (phase == GamePhase.PlayerTurn && turnSeat == seat) NextTurn(seat);
         else Changed();
     }
@@ -143,7 +156,18 @@ public class BlackjackGame : MonoBehaviour
     void ApplyNetworkState(string json)
     {
         TableState s = JsonUtility.FromJson<TableState>(json);
-        if (s == null) return;
+        if (s == null || !Enum.IsDefined(typeof(GamePhase), s.phase)
+            || s.turnSeat < -1 || s.turnSeat >= 4 || s.dealerCards == null
+            || s.seats == null || s.seats.Length != 4)
+            throw new ArgumentException("Invalid table state.");
+        foreach (int card in s.dealerCards)
+            if (card < HIDDEN_CARD || card >= 52) throw new ArgumentException("Invalid dealer card.");
+        foreach (var seat in s.seats)
+        {
+            if (seat == null || seat.cards == null) throw new ArgumentException("Invalid seat.");
+            foreach (int card in seat.cards)
+                if (card < 0 || card >= 52) throw new ArgumentException("Invalid player card.");
+        }
         phase = (GamePhase)s.phase;
         turnSeat = s.turnSeat;
         dealerCards = s.dealerCards;
@@ -151,8 +175,8 @@ public class BlackjackGame : MonoBehaviour
         Changed();
     }
 
-    public bool IsHost() => net == null || !net.isConnected || net.isHost;
-    public bool CanChangeBet() => phase == GamePhase.Waiting || phase == GamePhase.Result;
+    public bool IsHost() => net == null || (!net.IsJoining && (!net.isConnected || net.isHost));
+    public bool CanChangeBet() => (net == null || !net.IsJoining) && (phase == GamePhase.Waiting || phase == GamePhase.Result);
 
     public void LessBet()
     {
