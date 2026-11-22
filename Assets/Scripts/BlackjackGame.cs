@@ -64,7 +64,6 @@ public class BlackjackGame : MonoBehaviour
         net.OnAssignSeat = AssignEmptySeat;
         net.OnClientCommand = OnClientCommand;
         net.OnClientLeft = OnClientLeft;
-        net.OnJoinedAsClient = seat => { localSeat = seat; Changed(); };
         net.OnStateReceived = ApplyNetworkState;
         net.OnConnectionChanged = Changed;
         net.OnHostLost = ResetDisconnectedTable;
@@ -110,15 +109,15 @@ public class BlackjackGame : MonoBehaviour
     {
         localSeat = 0;
         seatsData[0].isOccupied = true;
-        string code = net.StartHost();
+        string address = net.StartHost();
         Changed();
-        return code;
+        return address;
     }
 
-    public void JoinGame(string code)
+    public void JoinGame(string address)
     {
         if (!CanChangeBet()) return;
-        net.Join(code);
+        net.Join(address);
     }
 
     int AssignEmptySeat()
@@ -153,7 +152,7 @@ public class BlackjackGame : MonoBehaviour
         else if (cmd == "MORE") MoreBetForSeat(seat);
     }
 
-    void ApplyNetworkState(string json)
+    void ApplyNetworkState(int localSeat, string json)
     {
         TableState s = JsonUtility.FromJson<TableState>(json);
         if (s == null || !Enum.IsDefined(typeof(GamePhase), s.phase)
@@ -168,6 +167,7 @@ public class BlackjackGame : MonoBehaviour
             foreach (int card in seat.cards)
                 if (card < 0 || card >= 52) throw new ArgumentException("Invalid player card.");
         }
+        this.localSeat = localSeat;
         phase = (GamePhase)s.phase;
         turnSeat = s.turnSeat;
         dealerCards = s.dealerCards;

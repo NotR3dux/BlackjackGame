@@ -53,8 +53,8 @@ public class TableUI : MonoBehaviour
         {
             hostButton.onClick.AddListener(() =>
             {
-                string code = game.HostGame();
-                if (joinTextInput != null && !string.IsNullOrEmpty(code)) joinTextInput.text = code;
+                string address = game.HostGame();
+                if (joinTextInput != null && !string.IsNullOrEmpty(address)) joinTextInput.text = address;
             });
         }
 
@@ -159,7 +159,7 @@ public class TableUI : MonoBehaviour
         switch (game.phase)
         {
             case GamePhase.Waiting:
-                if (game.net != null && !game.net.isConnected) return "Host a LAN table, enter a code or IP to join, or start solo.";
+                if (game.net != null && !game.net.isConnected) return "Host a LAN table, enter the host’s LAN IP to join, or start solo.";
                 if (game.net != null && game.net.isHost) return game.net.ConnectionMessage + " Press START when ready.";
                 return game.IsHost() ? "Klik START untuk mulai" : "Tunggu Host klik START";
             case GamePhase.PlayerTurn: return game.turnSeat == game.localSeat ? "Your Turn (Hit or Stand)" : $"Player {game.turnSeat + 1} Turn";

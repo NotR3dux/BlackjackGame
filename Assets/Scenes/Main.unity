@@ -3490,7 +3490,7 @@ MonoBehaviour:
     m_HorizontalOverflow: 0
     m_VerticalOverflow: 0
     m_LineSpacing: 1
-  m_Text: Join Code
+  m_Text: Host IP
 --- !u!222 &2004750237
 CanvasRenderer:
   m_ObjectHideFlags: 0

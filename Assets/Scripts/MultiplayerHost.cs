@@ -20,14 +20,10 @@ public class MultiplayerHost : MonoBehaviour
 {
     // UDP port shared by Host and Join. Change it on both builds and allow the new port through the firewall.
     public const ushort PORT = 7777;
-    // Base-36 digit order for join codes. Changing the order makes codes incompatible with older builds.
-    const string CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
     // Wire label for guest actions. Sender and receiver must use the same label.
     const string CommandMessage = "Blackjack.Command.v1";
-    // Wire label for the host's seat assignment. A mismatch prevents finishing Join.
-    const string SeatMessage = "Blackjack.Seat.v1";
     // Wire label for table snapshots. A mismatch prevents guests from seeing updates.
-    const string StateMessage = "Blackjack.State.v1";
+    const string StateMessage = "Blackjack.State.v2";
     // Maximum serialized snapshot size in bytes. Lowering it can make valid snapshots fail; increasing it reserves more temporary memory.
     const int StateCapacity = 4096;
 
@@ -37,8 +33,6 @@ public class MultiplayerHost : MonoBehaviour
     public bool isHost { get; private set; }
     // True while a guest waits for the host to assign a seat.
     public bool IsJoining { get; private set; }
-    // Address or encoded IPv4 text the host can share; it is not a password.
-    public string joinCode { get; private set; } = "";
     // Status text read by the table UI.
     public string ConnectionMessage { get; private set; } = "";
 
@@ -48,10 +42,8 @@ public class MultiplayerHost : MonoBehaviour
     public Action<int, string> OnClientCommand;
     // Tells BlackjackGame which guest seat to release.
     public Action<int> OnClientLeft;
-    // Tells the guest game which seat belongs to this device.
-    public Action<int> OnJoinedAsClient;
-    // Passes received JSON to the guest game for validation and display.
-    public Action<string> OnStateReceived;
+    // Passes the guest's seat and table JSON together so the game can validate before applying either.
+    public Action<int, string> OnStateReceived;
     // Asks the game to refresh after a connection status change.
     public Action OnConnectionChanged;
     // Resets the table when an established session ends.
@@ -89,7 +81,7 @@ public class MultiplayerHost : MonoBehaviour
             // Seconds Netcode allows for connection approval. Lower values fail stalled attempts sooner.
             ClientConnectionBufferTimeout = 8,
             // Connection compatibility number. Change it on both devices when intentionally breaking protocol compatibility.
-            ProtocolVersion = 1
+            ProtocolVersion = 2
         };
         // Registers the method that fills out Netcode's approval response.
         manager.ConnectionApprovalCallback = Approve;
@@ -128,7 +120,7 @@ public class MultiplayerHost : MonoBehaviour
     }
 
     // Direct IP setup follows Bitesize ClientDriven/HostJoinUI.cs.
-    // Starts a host session and returns a shareable address or code. Empty means hosting did not start.
+    // Starts a host session and returns a shareable IPv4 address. Empty means hosting did not start.
     public string StartHost()
     {
         // Creates the networking components if needed.
@@ -142,7 +134,7 @@ public class MultiplayerHost : MonoBehaviour
         {
             // Shows a likely cause of a bind failure. Update the wording if you change PORT.
             Report("Could not host. Check whether UDP port 7777 is already in use.");
-            // Returns no join code for a failed host attempt.
+            // Returns no address for a failed host attempt.
             return "";
         }
 
@@ -150,34 +142,26 @@ public class MultiplayerHost : MonoBehaviour
         manager.CustomMessagingManager.RegisterNamedMessageHandler(CommandMessage, ReceiveCommand);
         // Marks the local game ready to host and accept player actions.
         isHost = isConnected = true;
-        // Finds the LAN address and encodes it when supported.
-        joinCode = IpToCode(GetLocalIp());
-        // Shows the address or code to share with guests on the LAN.
-        Report("Share code " + joinCode + " with players on your LAN.");
-        // Returns the code to the Host button so it can populate the input field.
-        return joinCode;
+        var address = GetLocalIp();
+        Report("Share LAN IP " + address + " with players on your LAN.");
+        return address;
     }
 
-    // Takes the user-entered code or IPv4 address and begins connecting as a guest.
-    public void Join(string code)
+    // address is the host's dotted IPv4 address, on the same LAN as the guest.
+    public void Join(string address)
     {
-        // Creates or reuses the networking components.
         EnsureManager();
-        // Ignores another Join click while a network session is busy.
         if (manager.IsListening || manager.ShutdownInProgress) return;
-        // Decodes the input or validates it as a plain IPv4 address.
-        string ip = CodeToIp(code);
-        // Checks for invalid input before configuring transport.
-        if (ip == null)
+        if (!IPAddress.TryParse(address?.Trim(), out var ip) || ip.AddressFamily != AddressFamily.InterNetwork)
         {
             // Explains what input the Join field accepts.
-            Report("Enter a valid join code or IPv4 address.");
+            Report("Enter the host’s IPv4 address.");
             // Exits without starting a connection.
             return;
         }
 
         // Uses the host's IP as the destination and the same UDP port as StartHost.
-        transport.SetConnectionData(ip, PORT);
+        transport.SetConnectionData(ip.ToString(), PORT);
         // Clears a previous attempt's error before starting a new one.
         disconnectReason = null;
         // Starts the connection attempt. A successful return means it started, not that a seat is assigned.
@@ -190,8 +174,6 @@ public class MultiplayerHost : MonoBehaviour
         }
         // Keeps the UI waiting until a seat message arrives.
         IsJoining = true;
-        // Routes seat messages to ReceiveSeat.
-        manager.CustomMessagingManager.RegisterNamedMessageHandler(SeatMessage, ReceiveSeat);
         // Routes snapshots to ReceiveState.
         manager.CustomMessagingManager.RegisterNamedMessageHandler(StateMessage, ReceiveState);
         // Refreshes the display while the connection is pending.
@@ -227,13 +209,7 @@ public class MultiplayerHost : MonoBehaviour
     {
         // Only the host sends a seat, and only to IDs with a recorded assignment.
         if (!manager.IsServer || !seats.TryGetValue(client, out int seat)) return;
-        // Allocates four bytes for one int. Allocator.Temp and using make this buffer short-lived.
-        using var writer = new FastBufferWriter(sizeof(int), Allocator.Temp);
-        // Writes the assigned seat number into the buffer.
-        writer.WriteValueSafe(seat);
-        // Sends the named message to that client. ReliableFragmentedSequenced delivers in order on the same delivery channel as snapshots.
-        manager.CustomMessagingManager.SendNamedMessage(SeatMessage, client, writer, NetworkDelivery.ReliableFragmentedSequenced);
-        // Tells the game to broadcast the initial table state after sending the seat.
+        // Tells the game to broadcast the initial table state including the seat.
         OnClientCommand?.Invoke(seat, "JOIN");
     }
 
@@ -275,25 +251,6 @@ public class MultiplayerHost : MonoBehaviour
         Report(reason);
     }
 
-    // Accepts a seat message. Sender is the connection ID; reader contains the message bytes.
-    void ReceiveSeat(ulong sender, FastBufferReader reader)
-    {
-        // Accepts the assignment only while joining, from the host, with at least four bytes for the seat.
-        if (!IsJoining || sender != NetworkManager.ServerClientId || !reader.TryBeginRead(sizeof(int))) return;
-        // Reads a four-byte seat number. The host writer must use the same type.
-        reader.ReadValue(out int seat);
-        // Rejects numbers outside the guest seat range.
-        if (seat < 1 || seat > 3) return;
-        // Ends the wait for assignment.
-        IsJoining = false;
-        // Marks the guest ready for table snapshots.
-        isConnected = true;
-        // Passes the assigned seat to the local game so it knows whose turn counts as yours.
-        OnJoinedAsClient?.Invoke(seat);
-        // Clears the connecting message and refreshes the UI.
-        Report("");
-    }
-
     // Reads a guest action; sender identifies the connection and reader supplies its bytes.
     void ReceiveCommand(ulong sender, FastBufferReader reader)
     {
@@ -318,15 +275,23 @@ public class MultiplayerHost : MonoBehaviour
     // Receives a full table snapshot; sender identifies who sent it and reader holds the serialized bytes.
     void ReceiveState(ulong sender, FastBufferReader reader)
     {
-        // Accepts a snapshot only on a seated guest, from the host, within the byte limit.
-        if (!isConnected || isHost || sender != NetworkManager.ServerClientId || reader.Length > StateCapacity) return;
-        // Attempts to decode and apply the state.
+        // The first snapshot assigns the guest’s seat. Later snapshots use the same format.
+        if ((!IsJoining && !isConnected) || isHost || sender != NetworkManager.ServerClientId) return;
         try
         {
-            // Reads the length-prefixed string with bounds checking.
+            // Wire order must match SendToClients: a four-byte seat, then length-prefixed JSON.
+            if (reader.Length > StateCapacity) throw new ArgumentException("Snapshot is too large.");
+            reader.ReadValueSafe(out int seat);
+            if (seat < 1 || seat > 3) throw new ArgumentException("Invalid guest seat.");
             reader.ReadValueSafe(out string json);
-            // Passes JSON to BlackjackGame, which validates the data and updates the table.
-            OnStateReceived?.Invoke(json);
+
+            OnStateReceived?.Invoke(seat, json);
+            if (IsJoining)
+            {
+                IsJoining = false;
+                isConnected = true;
+                Report("");
+            }
         }
         // Catches malformed values or an out-of-bounds payload.
         catch (Exception e) when (e is ArgumentException || e is OverflowException)
@@ -341,17 +306,15 @@ public class MultiplayerHost : MonoBehaviour
     {
         // Only the running host can broadcast state.
         if (!isHost || manager.ShutdownInProgress) return;
-        // Allocates a temporary buffer of StateCapacity bytes. A larger serialization cannot fit.
-        using var writer = new FastBufferWriter(StateCapacity, Allocator.Temp);
-        // Encodes the length and text using the same format ReceiveState reads.
-        writer.WriteValueSafe(json);
-        // Visits each currently connected client ID.
         foreach (ulong client in manager.ConnectedClientsIds)
         {
-            // Sends only to assigned guests; the local host already has the state.
-            if (seats.ContainsKey(client))
-                // Queues the snapshot using reliable ordered delivery with fragmentation for larger payloads.
-                manager.CustomMessagingManager.SendNamedMessage(StateMessage, client, writer, NetworkDelivery.ReliableFragmentedSequenced);
+            if (!seats.TryGetValue(client, out int seat)) continue;
+
+            // Each guest gets its own seat number alongside the shared table state.
+            using var writer = new FastBufferWriter(StateCapacity, Allocator.Temp);
+            writer.WriteValueSafe(seat);
+            writer.WriteValueSafe(json);
+            manager.CustomMessagingManager.SendNamedMessage(StateMessage, client, writer, NetworkDelivery.ReliableFragmentedSequenced);
         }
     }
 
@@ -417,68 +380,5 @@ public class MultiplayerHost : MonoBehaviour
             // Falls back to loopback, which is only usable from the same machine.
             return "127.0.0.1";
         }
-    }
-
-    // Takes an IPv4 address as text and returns a shareable code or the original IPv4 address.
-    public static string IpToCode(string ipStr)
-    {
-        // Uses loopback for invalid or non-IPv4 input.
-        if (!IPAddress.TryParse(ipStr, out IPAddress ip) || ip.AddressFamily != AddressFamily.InterNetwork) ip = IPAddress.Loopback;
-        // Splits IPv4 into four bytes, one per dotted number.
-        byte[] b = ip.GetAddressBytes();
-        // Returns the plain IPv4 text for first bytes without a prefix mapping.
-        if (b[0] != 192 && b[0] != 10 && b[0] != 172 && b[0] != 127) return ip.ToString();
-        // Packs the last three bytes into 24 bits and XORs with a fixed mask. Change the mask in both directions together; this is reversible encoding.
-        uint val = (((uint)b[1] << 16) | ((uint)b[2] << 8) | b[3]) ^ 0x5A3C91u;
-        // Maps the first byte to C=192, A=10, B=172 or L=127. Keep the decoder mapping aligned.
-        char prefix = b[0] == 192 ? 'C' : b[0] == 10 ? 'A' : b[0] == 172 ? 'B' : 'L';
-
-        // Allocates six characters: one prefix and five base-36 digits.
-        char[] res = new char[6];
-        // Writes the first-byte marker.
-        res[0] = prefix;
-        // Fills positions 5 through 1 right to left using remainder and division by 36. Changing the base or length requires updating the decoder.
-        for (int i = 5; i >= 1; i--) { res[i] = CHARS[(int)(val % 36)]; val /= 36; }
-        // Converts the character array to the code shown in the UI.
-        return new string(res);
-    }
-
-    // Takes a join code or dotted IPv4 text. Returns the destination address or null if invalid.
-    public static string CodeToIp(string code)
-    {
-        // Rejects missing input before indexing it.
-        if (string.IsNullOrWhiteSpace(code)) return null;
-        // Ignores surrounding spaces and letter case in the input.
-        code = code.Trim().ToUpperInvariant();
-        // Treats dotted input as an address candidate.
-        if (code.Contains("."))
-            // Accepts the candidate only if it parses as IPv4.
-            return IPAddress.TryParse(code, out var ip) && ip.AddressFamily == AddressFamily.InterNetwork ? ip.ToString() : null;
-        // Requires one prefix plus five encoded digits.
-        if (code.Length != 6) return null;
-        // Rejects prefixes not recognized by the encoder.
-        if ("CABL".IndexOf(code[0]) < 0) return null;
-
-        // Starts the base-36 accumulator at zero.
-        ulong val = 0;
-        // Reads each of the five digits from left to right.
-        for (int i = 1; i < 6; i++)
-        {
-            // Gets the digit's numeric value from the shared alphabet.
-            int idx = CHARS.IndexOf(code[i]);
-            // Rejects any digit outside the alphabet.
-            if (idx < 0) return null;
-            // Shifts the accumulated number one base-36 place and appends the new digit.
-            val = val * 36 + (ulong)idx;
-        }
-
-        // Rejects a number too large for the three packed IPv4 bytes.
-        if (val > 0xFFFFFF) return null;
-        // Reverses the encoder's XOR with the same mask.
-        uint raw = ((uint)val) ^ 0x5A3C91u;
-        // Decodes the prefix into the original first IPv4 byte.
-        byte b0 = code[0] == 'C' ? (byte)192 : code[0] == 'A' ? (byte)10 : code[0] == 'B' ? (byte)172 : (byte)127;
-        // Extracts the remaining three bytes using shifts and masks and formats a dotted address.
-        return $"{b0}.{(raw >> 16) & 0xFF}.{(raw >> 8) & 0xFF}.{raw & 0xFF}";
     }
 }
