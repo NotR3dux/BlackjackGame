@@ -68,12 +68,6 @@ public class BlackjackGame : MonoBehaviour
         net.OnStateReceived = ApplyNetworkState;
     }
 
-    void Start()
-    {
-        // Otomatis Host & tampilkan Join Code saat game mulai
-        HostGame();
-    }
-
     void Changed()
     {
         SeatData my = seatsData[localSeat];

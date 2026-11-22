@@ -27,7 +27,8 @@ public class TableUI : MonoBehaviour
     public Button lessBetButton;
     public Button moreBetButton;
 
-    // Hubungkan ke JoinButton dan Join Text (InputField) yang ada di scene
+    // Hubungkan ke HostButton, JoinButton dan Join Text (InputField) yang ada di scene
+    public Button hostButton;
     public Button joinButton;
     public InputField joinTextInput;
 
@@ -38,7 +39,6 @@ public class TableUI : MonoBehaviour
     public float disabledTextAlpha = 0.4f;
 
     bool needRefresh = true;
-    bool codeShownOnStart = false;
     Dictionary<string, Sprite> spriteCache = new Dictionary<string, Sprite>();
 
     void Awake()
@@ -48,6 +48,15 @@ public class TableUI : MonoBehaviour
         startButton.onClick.AddListener(game.StartRound);
         lessBetButton.onClick.AddListener(game.LessBet);
         moreBetButton.onClick.AddListener(game.MoreBet);
+
+        if (hostButton != null)
+        {
+            hostButton.onClick.AddListener(() =>
+            {
+                string code = game.HostGame();
+                if (joinTextInput != null) joinTextInput.text = code;   // tampilkan Join Code untuk dikasih ke teman
+            });
+        }
 
         if (joinButton != null)
         {
@@ -71,13 +80,6 @@ public class TableUI : MonoBehaviour
 
     void Refresh()
     {
-        // Tampilkan kode Host di Join Text saat game pertama kali mulai
-        if (!codeShownOnStart && joinTextInput != null && game.net != null && !string.IsNullOrEmpty(game.net.joinCode))
-        {
-            joinTextInput.text = game.net.joinCode;
-            codeShownOnStart = true;
-        }
-
         // Dealer
         ShowCards(dealerCardArea, game.dealerCards);
         dealerText.text = game.dealerCards.Count > 0 ? "DEALER   Score: " + BlackjackGame.GetScore(game.dealerCards) : "DEALER";
@@ -108,6 +110,11 @@ public class TableUI : MonoBehaviour
 
         SetButton(lessBetButton, game.CanChangeBet() && mySeat.nextBet > BlackjackGame.BET_AMOUNT);
         SetButton(moreBetButton, game.CanChangeBet() && mySeat.nextBet + BlackjackGame.BET_AMOUNT <= mySeat.money);
+
+        // Host / Join hanya bisa diklik kalau belum terhubung
+        bool online = game.net != null && game.net.isConnected;
+        if (hostButton != null) SetButton(hostButton, !online);
+        if (joinButton != null) SetButton(joinButton, !online);
     }
 
     void SetButton(Button button, bool isOn)
@@ -148,7 +155,9 @@ public class TableUI : MonoBehaviour
 
         switch (game.phase)
         {
-            case GamePhase.Waiting: return game.IsHost() ? "Klik START untuk mulai" : "Tunggu Host klik START";
+            case GamePhase.Waiting:
+                if (game.net != null && !game.net.isConnected) return "Klik HOST, atau isi Join Code lalu klik JOIN";
+                return game.IsHost() ? "Klik START untuk mulai" : "Tunggu Host klik START";
             case GamePhase.PlayerTurn: return game.turnSeat == game.localSeat ? "Your Turn (Hit or Stand)" : $"Player {game.turnSeat + 1} Turn";
             case GamePhase.DealerTurn: return "Dealer Turn";
             case GamePhase.Result: return "You " + game.status + "!";
